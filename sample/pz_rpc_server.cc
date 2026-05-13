@@ -16,12 +16,13 @@ std::string fun1_(pzmq* self, const std::shared_ptr<pzmq_data>& msg)
     }
     std::cout << std::endl;
 
-    
+    // 拆包，获取第一帧数据
     std::string param0 = msg->get_param(0);
+    // 第二帧数据
     std::string param1 = msg->get_param(1);
 
     std::cout << "fun1 received: param0=" << param0 << ", param1=" << param1 << std::endl;
-
+    // 闭包：0x5hellosorbai
     return pzmq_data::set_param("hello", "sorbai");
 }
 

@@ -21,4 +21,4 @@ make install
 ldconfig
 popd
 
-rm -rf PKG_NAME eventpp-${VERSION}
+rm -rf $PKG_NAME eventpp-${VERSION}

@@ -23,4 +23,4 @@ make install
 ldconfig
 popd
 
-rm -rf PKG_NAME simdjson-${VERSION}
+rm -rf $PKG_NAME simdjson-${VERSION}

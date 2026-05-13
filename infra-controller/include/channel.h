@@ -27,19 +27,21 @@ namespace StackFlows
     class llm_channel_obj
     {
     private:
-        std::unordered_map<int, std::shared_ptr<pzmq>> zmq_;
-        std::atomic<int> zmq_url_index_;
+        // 通过work_id区分不同的订阅者
+        std::unordered_map<int, std::shared_ptr<pzmq>> zmq_; // ZMQ连接池
+        // 通过url订阅
+        std::atomic<int> zmq_url_index_; // 连接索引
         std::unordered_map<std::string, int> zmq_url_map_;
 
     public:
-        std::string unit_name_;
-        bool enoutput_;
-        bool enstream_;
-        std::string request_id_;
-        std::string work_id_;
-        std::string inference_url_;
-        std::string publisher_url_;
-        std::string output_url_;
+        std::string unit_name_; // 单元名称
+        bool enoutput_; // 是否启用输出，控制是否将结果发送给用户
+        bool enstream_; // 是否启用流式输出，控制是否将结果分多次发送给用户
+        std::string request_id_; //当前请求id，rpc请求标识
+        std::string work_id_; // 工作id
+        std::string inference_url_; // 外部用户推理服务URL，pub/sub
+        std::string publisher_url_; // pub给其他的业务节点模块
+        std::string output_url_; // 输出给外部用户通信，push/pull
         std::string publisher_url;
 
         llm_channel_obj(const std::string &_publisher_url, const std::string &inference_url, const std::string &unit_name);

@@ -10,6 +10,8 @@ llm_channel_obj::llm_channel_obj(const std::string &_publisher_url, const std::s
 {
     // publisher_url_ = _publisher_url;
     zmq_url_index_ = -1000;
+    // 初始化zmq_连接池，-1位置为pub连接，-2位置为push连接 -> pub和push连接只有一个
+    // sub通信有多个连接，存储在zmq_的非负位置，通过work_id区分不同的订阅者
     zmq_[-1] = std::make_shared<pzmq>(publisher_url_, ZMQ_PUB);
     zmq_[-2].reset();
 }
@@ -18,6 +20,7 @@ llm_channel_obj::~llm_channel_obj()
 {
     std::cout << "llm_channel_obj 析构" << std::endl;
 }
+
 
 void llm_channel_obj::subscriber_event_call(const std::function<void(const std::string &, const std::string &)> &call,
                                             pzmq *_pzmq, const std::shared_ptr<pzmq_data> &raw)
@@ -49,6 +52,7 @@ void message_handler(pzmq *zmq_obj, const std::shared_ptr<pzmq_data> &data)
     std::cout << "Received: " << data->string() << std::endl;
 }
 
+// 订阅指定的worrk_id接口
 int llm_channel_obj::subscriber_work_id(const std::string &work_id,
                                         const std::function<void(const std::string &, const std::string &)> &call)
 {
@@ -77,12 +81,14 @@ int llm_channel_obj::subscriber_work_id(const std::string &work_id,
         subscriber_url = inference_url_;
     }
 
+    // 根据work_id创建对应的zmq_sub连接，并将回调函数绑定到该连接上，接收数据后通过回调函数处理
     zmq_[id_num] = std::make_shared<pzmq>(
         subscriber_url, ZMQ_SUB,
         std::bind(&llm_channel_obj::subscriber_event_call, this, call, std::placeholders::_1, std::placeholders::_2));
     return 0;
 }
 
+// 停止订阅指定work_id接口，关闭对应的zmq_sub连接
 void llm_channel_obj::stop_subscriber_work_id(const std::string &work_id)
 {
     int id_num;
@@ -104,6 +110,7 @@ void llm_channel_obj::stop_subscriber_work_id(const std::string &work_id)
         zmq_.erase(id_num);
 }
 
+// 通过url订阅接口，创建zmq_sub连接 -> 通用订阅接口
 void llm_channel_obj::subscriber(const std::string &zmq_url, const pzmq::msg_callback_fun &call)
 {
     zmq_url_map_[zmq_url] = zmq_url_index_--;
@@ -141,6 +148,7 @@ int llm_channel_obj::send_raw_to_usr(const std::string &raw)
     }
 }
 
+// 新用户连接 重置zmq_[-2]连接池，更新push-zmq通信
 void llm_channel_obj::set_push_url(const std::string &url)
 {
     if (output_url_ != url)

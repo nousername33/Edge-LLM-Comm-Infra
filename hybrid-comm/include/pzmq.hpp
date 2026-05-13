@@ -31,15 +31,19 @@ namespace StackFlows
 
     public:
         const int rpc_url_head_length = 6;
+        // 默认RPC通信URL前缀，使用IPC协议，后续跟随服务器名称
+        // 结合业务场景考虑使用IPC进程间通信（用一台主机内的进程间通信机制）：因为IPC通信效率较高 业务节点只部署在一个端侧设备上
+        // 如果业务场景需要跨主机通信，可以将rpc_url_head_设置为TCP协议的URL前缀，例如 "tcp://localhost:"，并在服务器名称后指定端口号
         std::string rpc_url_head_ = "ipc:///tmp/rpc.";
-        void *zmq_ctx_;
-        void *zmq_socket_;
+        void *zmq_ctx_; //ZeroMQ 上下文
+        void *zmq_socket_; //ZeroMQ 套接字
+        // action服务名字 - callback function 服务功能 map
         std::unordered_map<std::string, rpc_callback_fun> zmq_fun_;
-        std::mutex zmq_fun_mtx_;
+        std::mutex zmq_fun_mtx_; // zmq_fun_ map 互斥锁
         std::atomic<bool> flage_;
         std::unique_ptr<std::thread> zmq_thread_;
         int mode_;
-        std::string rpc_server_;
+        std::string rpc_server_; // rpc 服务器名称
         std::string zmq_url_;
         int timeout_;
 
@@ -104,6 +108,8 @@ namespace StackFlows
             }
             return action_list;
         }
+
+        // 注册RPC服务功能回调函数，提供action服务名字和对应的处理函数，内部会根据action调用对应的回调函数处理数据并获取返回结果
         int register_rpc_action(const std::string &action, const rpc_callback_fun &raw_call)
         {
             int ret = 0;
@@ -113,6 +119,7 @@ namespace StackFlows
                 zmq_fun_[action] = raw_call;
                 return ret;
             }
+            // 判断zmq_fun_是否为空，如果为空 第一次创建rpc，可以惰性执行creat
             if (zmq_fun_.empty())
             {
                 std::string url = rpc_url_head_ + rpc_server_;
@@ -124,6 +131,7 @@ namespace StackFlows
             zmq_fun_[action] = raw_call;
             return ret;
         }
+        // 注销RPC服务功能回调函数，根据action服务名字删除对应的处理函数
         void unregister_rpc_action(const std::string &action)
         {
             std::unique_lock<std::mutex> lock(zmq_fun_mtx_);
@@ -132,6 +140,7 @@ namespace StackFlows
                 zmq_fun_.erase(action);
             }
         }
+        // 客户端 调用RPC服务功能，根据action服务名字发送请求数据并通过回调函数处理返回结果
         int call_rpc_action(const std::string &action, const std::string &data, const msg_callback_fun &raw_call)
         {
             int ret;
@@ -152,7 +161,9 @@ namespace StackFlows
                 }
                 // requist
                 {
+                    // 发送第一帧数据action，表示调用的服务功能；ZMQ_SNDMORE表示后续还有数据帧需要发送
                     zmq_send(zmq_socket_, action.c_str(), action.length(), ZMQ_SNDMORE);
+                    // 发送第二帧数据data，表示调用服务功能需要处理的数据；0表示这是最后一帧数据
                     zmq_send(zmq_socket_, data.c_str(), data.length(), 0);
                 }
                 // action
@@ -169,15 +180,17 @@ namespace StackFlows
             close_zmq();
             return ret;
         }
+
+        // 简易工厂模式
+        // 通过统一creat接口创建不同通信模式的socket，隐藏实现细节
         int creat(const std::string &url, const msg_callback_fun &raw_call = nullptr)
         {
             zmq_url_ = url;
-            do
-            {
+            
+            do{
                 zmq_ctx_ = zmq_ctx_new();
             } while (zmq_ctx_ == NULL);
-            do
-            {
+            do{
                 zmq_socket_ = zmq_socket(zmq_ctx_, mode_ & 0x3f);
             } while (zmq_socket_ == NULL);
 
@@ -216,6 +229,7 @@ namespace StackFlows
             return zmq_send(zmq_socket_, raw.c_str(), raw.length(), 0);
         }
 
+        // 无状态发送端口，适用于PUB和PUSH模式，无需单开线程维护连接状态，发送数据时直接调用send_data方法即可
         inline int creat_pub(const std::string &url)
         {
             return zmq_bind(zmq_socket_, url.c_str());
@@ -224,11 +238,12 @@ namespace StackFlows
         {
             int reconnect_interval = 100;
             zmq_setsockopt(zmq_socket_, ZMQ_RECONNECT_IVL, &reconnect_interval, sizeof(reconnect_interval));
-            int max_reconnect_interval = 1000;  // 5 seconds
+            int max_reconnect_interval = 1000; 
             zmq_setsockopt(zmq_socket_, ZMQ_RECONNECT_IVL_MAX, &max_reconnect_interval, sizeof(max_reconnect_interval));
             zmq_setsockopt(zmq_socket_, ZMQ_SNDTIMEO, &timeout_, sizeof(timeout_));
             return zmq_connect(zmq_socket_, url.c_str());
         }
+        // 有状态接收端口，适用于SUB、PULL和RPC服务模式，需要单开线程维护连接状态，需要长期稳定接收并处理数据时通过回调函数处理
         inline int creat_pull(const std::string &url, const msg_callback_fun &raw_call)
         {
             int ret = zmq_bind(zmq_socket_, url.c_str());
@@ -238,10 +253,10 @@ namespace StackFlows
         }
         inline int subscriber_url(const std::string &url, const msg_callback_fun &raw_call)
         {
-            int reconnect_interval = 100;
+            int reconnect_interval = 100; //首次重连时间100ms
             zmq_setsockopt(zmq_socket_, ZMQ_RECONNECT_IVL, &reconnect_interval, sizeof(reconnect_interval));
 
-            int max_reconnect_interval = 1000;  // 5 seconds
+            int max_reconnect_interval = 1000;  // 最大重连时间1s
             zmq_setsockopt(zmq_socket_, ZMQ_RECONNECT_IVL_MAX, &max_reconnect_interval, sizeof(max_reconnect_interval));
             int ret = zmq_connect(zmq_socket_, url.c_str());
             zmq_setsockopt(zmq_socket_, ZMQ_SUBSCRIBE, "", 0);
@@ -249,27 +264,31 @@ namespace StackFlows
             zmq_thread_ = std::make_unique<std::thread>(std::bind(&pzmq::zmq_event_loop, this, raw_call));
             return ret;
         }
-        inline int creat_rep(const std::string &url, const msg_callback_fun &raw_call)
+
+        inline int creat_rep(const std::string &url, const msg_callback_fun &raw_call) // rpc 服务端
         {
             int ret = zmq_bind(zmq_socket_, url.c_str());
             flage_ = false;
             zmq_thread_ = std::make_unique<std::thread>(std::bind(&pzmq::zmq_event_loop, this, raw_call));
             return ret;
         }
-        inline int creat_req(const std::string &url)
+        inline int creat_req(const std::string &url)  // rpc 客户端
         {
             if (!rpc_url_head_.empty())
             {
+                // url:"ipc:///tmp/rpc.test"  socket_file:"/tmp/rpc.test"
                 std::string socket_file = url.substr(rpc_url_head_length);
                 if (access(socket_file.c_str(), F_OK) != 0)
                 {
                     return -1;
                 }
             }
+            // 发送/接收数据阻塞等待时间 3s
             zmq_setsockopt(zmq_socket_, ZMQ_SNDTIMEO, &timeout_, sizeof(timeout_));
             zmq_setsockopt(zmq_socket_, ZMQ_RCVTIMEO, &timeout_, sizeof(timeout_));
             return zmq_connect(zmq_socket_, url.c_str());
         }
+
         void zmq_event_loop(const msg_callback_fun &raw_call)
         {
             pthread_setname_np(pthread_self(), "zmq_event_loop"); 
@@ -286,6 +305,7 @@ namespace StackFlows
             while (!flage_.load())
             {
                 std::shared_ptr<pzmq_data> msg_ptr = std::make_shared<pzmq_data>();
+                // zmq_pull epoll等待数据
                 if (mode_ == ZMQ_PULL)
                 {
                     ret = zmq_poll(items, 1, -1);
@@ -299,6 +319,9 @@ namespace StackFlows
                         continue;
                     }
                 }
+
+                // 三种模式（SUB、PULL和RPC服务端）都通过zmq_msg_recv接收数据，
+                // 区别在于RPC服务模式需要接收两帧消息（action和data），并通过回调函数处理后返回结果
                 ret = zmq_msg_recv(msg_ptr->get(), zmq_socket_, 0);
                 if (ret <= 0)
                 {
@@ -314,6 +337,8 @@ namespace StackFlows
                     try
                     {
                         std::unique_lock<std::mutex> lock(zmq_fun_mtx_);
+                        // 根据action调用对应的回调函数处理数据并获取返回结果，如果action不存在则返回"NotAction"
+                        // msg_ptr: action  msg1_ptr: data
                         retval = zmq_fun_.at(msg_ptr->string())(this, msg1_ptr);
                     }
                     catch (...)
@@ -325,7 +350,7 @@ namespace StackFlows
                 }
                 else
                 {
-                    raw_call(this, msg_ptr);
+                    raw_call(this, msg_ptr); // sub pull
                 }
                 msg_ptr.reset();
             }
